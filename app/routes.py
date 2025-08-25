@@ -4,6 +4,8 @@ import re
 from flask import Blueprint, request, jsonify, render_template, current_app
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
 from datetime import datetime
 import google.generativeai as genai
 from .models import Question
@@ -78,7 +80,6 @@ def generate_paper():
         db.session.add(new_q)
     db.session.commit()
 
-    # ---- PDF GENERATION ----
         # ---- PDF GENERATION ----
     pdf_filename = f"paper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_dir = os.path.join(current_app.root_path, "static", "papers")
@@ -86,11 +87,12 @@ def generate_paper():
     pdf_path = os.path.join(pdf_dir, pdf_filename)
 
     from reportlab.lib.units import inch
+    from reportlab.platypus import Table
 
     c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
 
-    # Title section
+    # ===== HEADER =====
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width/2, height - 50, f"{school}")
     c.setFont("Helvetica", 12)
@@ -98,52 +100,109 @@ def generate_paper():
     c.drawCentredString(width/2, height - 90, f"Class {class_} - {subject}")
     c.drawRightString(width - 50, height - 110, f"Date: {datetime.now().strftime('%d-%m-%Y')}")
 
-    # Draw line
     c.line(50, height - 120, width - 50, height - 120)
 
-    # Group questions by type
+    # ===== GROUP BY SECTION =====
     sections = {
         "Multiple Choice": [],
         "Fill in the Blanks": [],
         "Short Answer": [],
-        "Long Answer": []
+        "Long Answer": [],
+        "Matching": [],
+        "Case Study": []
     }
-    for q in questions:
-        if q["type"] in sections:
-            sections[q["type"]].append(q)
 
-    y = height - 150
+    for q in questions:
+        q_type = q["type"].strip()
+
+        # Normalize synonyms
+        if q_type in ["MCQ", "Multiple Choice"]:
+            q_type = "Multiple Choice"
+        elif q_type in ["Match the Following", "Matching"]:
+            q_type = "Matching"
+        elif q_type in ["Case Study", "Case"]:
+            q_type = "Case Study"
+
+        if q_type in sections:
+            sections[q_type].append(q)
+
     section_titles = {
         "Multiple Choice": "Section A - Multiple Choice Questions",
         "Fill in the Blanks": "Section B - Fill in the Blanks",
         "Short Answer": "Section C - Short Answer Questions",
-        "Long Answer": "Section D - Long Answer Questions"
+        "Long Answer": "Section D - Long Answer Questions",
+        "Matching": "Section E - Matching Questions",
+        "Case Study": "Section F - Case Study"
     }
+
+    y = height - 150
+    qnum = 1  # continuous numbering across all sections
+
+    styles = getSampleStyleSheet()
+    styleN = styles["Normal"]
 
     for sec, qlist in sections.items():
         if not qlist:
             continue
 
-        # Section title
+        # Section Title (only once per section)
         c.setFont("Helvetica-Bold", 13)
         c.drawString(50, y, section_titles[sec])
         y -= 25
 
-        c.setFont("Helvetica", 11)
-        for i, q in enumerate(qlist, start=1):
-            text = f"Q{i}. {q['question']}   ({q['marks']} marks)"
-            c.drawString(70, y, text)
-            y -= 20
+        for q in qlist:
+            if sec == "Matching":
+                # Matching special layout
+                c.setFont("Helvetica-Bold", 11)
+                c.drawString(70, y, f"Q{qnum}. Match the following: ({q['marks']} marks)")
+                y -= 20
+                c.setFont("Helvetica", 11)
 
-            # Page break if space runs out
-            if y < 100:
+                # Expecting AI output like:
+                # "Column A: 1. Force, 2. Velocity | Column B: a. Newton, b. m/s"
+                text = q["question"]
+
+                colA, colB = [], []
+                if "Column A:" in text and "Column B:" in text:
+                    parts = text.split("Column B:")
+                    colA_text = parts[0].replace("Column A:", "").strip()
+                    colB_text = parts[1].strip()
+                    colA = [a.strip() for a in re.split(r"[;,]", colA_text) if a.strip()]
+                    colB = [b.strip() for b in re.split(r"[;,]", colB_text) if b.strip()]
+
+                if colA and colB:
+                    data = [["Column A", "Column B"]] + list(zip(colA, colB))
+                    table = Table(data, colWidths=[200, 200])
+                    table.wrapOn(c, width, height)
+                    table.drawOn(c, 70, y - (20 * len(data)))
+                    y -= (20 * len(data) + 20)
+                else:
+                    p = Paragraph(text, styleN)  # fallback plain text
+                    w, h = p.wrap(width - 100, y)
+                    p.drawOn(c, 70, y - h)
+                    y -= (h + 15)
+
+                qnum += 1
+                continue
+
+            # === Normal questions (wrapped text) ===
+            text = f"Q{qnum}. {q['question']}   ({q['marks']} marks)"
+            p = Paragraph(text, styleN)
+            w, h = p.wrap(width - 100, y)
+            if y - h < 100:  # page break
                 c.showPage()
                 y = height - 50
-                c.setFont("Helvetica", 11)
+            p.drawOn(c, 70, y - h)
+            y -= (h + 15)
+            qnum += 1
 
         y -= 15  # gap between sections
 
+
+
     c.save()
+
+
 
 
     # ---- RETURN ----
