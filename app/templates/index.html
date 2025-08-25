@@ -425,16 +425,29 @@ function renderGeneratedPaper(data) {
         container.className = 'container my-4';
         document.body.appendChild(container);
     }
-    const { summary, questions } = data || {};
+    const { summary, questions, pdf_url } = data || {};
     container.innerHTML = `
-        <h3>Generated Paper</h3>
-        <p><strong>Total Questions:</strong> ${summary?.total_questions || 0}</p>
-        <p><strong>Total Marks:</strong> ${summary?.total_marks || 0}</p>
-        <ol>
-            ${(questions || []).map(q => `<li>${q.type} (${q.marks} marks) [${q.difficulty}] - ${q.question}</li>`).join('')}
-        </ol>
-    `;
+    <h3>Generated Paper</h3>
+    <p><strong>Total Questions:</strong> ${summary?.total_questions || 0}</p>
+    <p><strong>Total Marks:</strong> ${summary?.total_marks || 0}</p>
+    <ol>
+        ${(questions || []).map(q => `<li>${q.type} (${q.marks} marks) [${q.difficulty}] - ${q.question}</li>`).join('')}
+    </ol>
+    <div class="mt-4">
+        <a href="${data.pdf_url}" class="btn btn-primary" download>📥 Download PDF</a>
+    </div>
+`;
+
+
+    // Show download button if backend sent a pdf_url
+    if (pdf_url) {
+        const pdfSection = document.getElementById('pdf-download');
+        const pdfLink = document.getElementById('pdf-link');
+        pdfLink.href = pdf_url;
+        pdfSection.style.display = "block";
+    }
 }
+
 
 
             // Theme toggle
@@ -529,5 +542,15 @@ function renderGeneratedPaper(data) {
             updateDistribution();
         });
     </script>
+
+
+     <!-- PDF Download Button -->
+    <div id="pdf-download" class="text-center my-4" style="display: none;">
+        <a id="pdf-link" href="#" target="_blank" class="btn btn-primary btn-lg">
+            📄 Download Question Paper (PDF)
+        </a>
+    </div>
+
+
 </body>
 </html>
