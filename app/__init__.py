@@ -3,10 +3,14 @@ import urllib.parse
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 load_dotenv()
 
 db = SQLAlchemy()
+
+# Configure Gemini AI
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 
 def create_app():
