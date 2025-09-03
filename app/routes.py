@@ -1,6 +1,10 @@
 import os
 import json
 import re
+from flask import send_file
+import uuid
+from docx import Document
+import io
 from flask import Blueprint, request, jsonify, render_template, current_app
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -29,6 +33,8 @@ def generate_paper():
     school = data.get("schoolName")
     qdist = data.get("questionDistribution", {})
     ddist = data.get("difficultyDistribution", {})
+    exam_name = data.get("examName")
+
 
     # ---- AI PROMPT ----
     prompt = f"""
@@ -40,11 +46,13 @@ def generate_paper():
     Difficulty distribution: {ddist}
 
     Output only valid JSON array. Each item must have:
-    - type (MCQ, Fill in the Blanks, Short Answer, Long Answer, etc.)
+    - type (MCQ, Fill in the Blanks, Short Answer, Long Answer, Case Study, etc.)
     - question (text of the question)
     - marks (marks per question)
     - difficulty (Easy, Medium, Hard)
+    - answer (correct answer or solution for the question)
     """
+
 
     model = genai.GenerativeModel("gemini-1.5-flash")
     response = model.generate_content(prompt)
@@ -80,6 +88,30 @@ def generate_paper():
         db.session.add(new_q)
     db.session.commit()
 
+    # ---- UNIQUE ID + SAVE JSON ----
+    paper_id = str(uuid.uuid4())[:8]
+    papers_dir = os.path.join(current_app.root_path, "static", "papers")
+    os.makedirs(papers_dir, exist_ok=True)
+    json_path = os.path.join(papers_dir, f"{paper_id}.json")
+
+    summary = {
+        "total_questions": len(questions),
+        "total_marks": sum(int(q.get("marks", 0)) for q in questions)
+    }
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "examName": exam_name,
+            "schoolName": school,
+            "schoolBoard": board,
+            "class": class_,
+            "subject": subject,
+            "questions": questions,
+            "summary": summary
+        }, f, indent=2, ensure_ascii=False)
+
+
+
         # ---- PDF GENERATION ----
     pdf_filename = f"paper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     pdf_dir = os.path.join(current_app.root_path, "static", "papers")
@@ -96,8 +128,14 @@ def generate_paper():
     c.setFont("Helvetica-Bold", 16)
     c.drawCentredString(width/2, height - 50, f"{school}")
     c.setFont("Helvetica", 12)
-    c.drawCentredString(width/2, height - 70, f"{board} Board Examination")
+
+    if exam_name:
+        c.drawCentredString(width/2, height - 70, exam_name)
+    else:
+        c.drawCentredString(width/2, height - 70, f"{board} Board Examination")
+
     c.drawCentredString(width/2, height - 90, f"Class {class_} - {subject}")
+
     c.drawRightString(width - 50, height - 110, f"Date: {datetime.now().strftime('%d-%m-%Y')}")
 
     c.line(50, height - 120, width - 50, height - 120)
@@ -208,9 +246,60 @@ def generate_paper():
     # ---- RETURN ----
     return jsonify({
         "questions": questions,
-        "summary": {
-            "total_questions": len(questions),
-            "total_marks": sum(int(q.get("marks", 0)) for q in questions)
-        },
-        "pdf_url": f"/static/papers/{pdf_filename}"
+        "summary": summary,
+        "pdf_url": f"/static/papers/{pdf_filename}",
+        "word_url": f"/api/download/word/{paper_id}",
+        "answer_key_url": f"/api/download/answer_key/{paper_id}"
     })
+
+@main.route("/api/download/word/<paper_id>", methods=["GET"])
+def download_word(paper_id):
+    json_path = os.path.join(current_app.root_path, "static", "papers", f"{paper_id}.json")
+    if not os.path.exists(json_path):
+        return jsonify({"error": "Paper not found"}), 404
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        paper = json.load(f)
+
+    doc = Document()
+    doc.add_heading(paper.get("examName", "Question Paper"), 0)
+    doc.add_paragraph(f"School: {paper.get('schoolName')}")
+    doc.add_paragraph(f"Board: {paper.get('schoolBoard')}")
+    doc.add_paragraph(f"Class: {paper.get('class')}  Subject: {paper.get('subject')}")
+    doc.add_heading("Questions", level=1)
+    for i, q in enumerate(paper.get("questions", []), 1):
+        doc.add_paragraph(f"Q{i}. {q['question']} ({q['marks']} marks) [{q['difficulty']}]")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True,
+                     download_name=f"paper_{paper_id}.docx",
+                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+@main.route("/api/download/answer_key/<paper_id>", methods=["GET"])
+def download_answer_key(paper_id):
+    json_path = os.path.join(current_app.root_path, "static", "papers", f"{paper_id}.json")
+    if not os.path.exists(json_path):
+        return jsonify({"error": "Paper not found"}), 404
+
+    # Load saved paper JSON
+    with open(json_path, "r", encoding="utf-8") as f:
+        paper = json.load(f)
+
+    # Build answer key (only answers, no questions)
+    answer_text = f"Answer Key for {paper.get('subject')} - Class {paper.get('class')}\n\n"
+    for i, q in enumerate(paper.get("questions", []), 1):
+        answer_text += f"Answer {i}. {q.get('answer', 'Answer not available')}\n\n"
+
+    buf = io.BytesIO(answer_text.encode("utf-8"))
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f"answer_key_{paper_id}.txt",
+        mimetype="text/plain"
+    )
+
+
+
