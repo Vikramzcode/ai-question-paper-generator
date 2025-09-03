@@ -48,10 +48,13 @@ def generate_paper():
     Output only valid JSON array. Each item must have:
     - type (MCQ, Fill in the Blanks, Short Answer, Long Answer, Case Study, etc.)
     - question (text of the question)
+    - options (for MCQ only: provide exactly 4 options as a JSON list)
     - marks (marks per question)
     - difficulty (Easy, Medium, Hard)
-    - answer (correct answer or solution for the question)
+    - answer (correct answer or solution for the question; if MCQ, give the correct option letter like "A" or "B")
     """
+
+
 
 
     model = genai.GenerativeModel("gemini-1.5-flash")
@@ -232,14 +235,27 @@ def generate_paper():
                 y = height - 50
             p.drawOn(c, 70, y - h)
             y -= (h + 15)
-            qnum += 1
+           # === MCQ Options ===
+            if sec == "Multiple Choice":
+                options = q.get("options", [])
+                for idx, opt in enumerate(options, start=1):
+                    opt_text = f"   ({chr(64+idx)}) {opt}"   # → (A), (B), (C), (D)
+                    p_opt = Paragraph(opt_text, styleN)
+                    w, h = p_opt.wrap(width - 120, y)
+                    if y - h < 100:
+                        c.showPage()
+                        y = height - 50
+                    p_opt.drawOn(c, 90, y - h)
+                    y -= (h + 10)
+
+            qnum += 1 
+
+        
 
         y -= 15  # gap between sections
 
 
-
     c.save()
-
 
 
 
@@ -267,15 +283,27 @@ def download_word(paper_id):
     doc.add_paragraph(f"Board: {paper.get('schoolBoard')}")
     doc.add_paragraph(f"Class: {paper.get('class')}  Subject: {paper.get('subject')}")
     doc.add_heading("Questions", level=1)
+
     for i, q in enumerate(paper.get("questions", []), 1):
+        # Question text
         doc.add_paragraph(f"Q{i}. {q['question']} ({q['marks']} marks) [{q['difficulty']}]")
+
+        # If it's an MCQ, add options below
+        if q.get("type") in ["MCQ", "Multiple Choice"]:
+            options = q.get("options", [])
+            for idx, opt in enumerate(options, start=1):
+                doc.add_paragraph(f"   ({chr(64+idx)}) {opt}", style="List Bullet")
 
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
-    return send_file(buf, as_attachment=True,
-                     download_name=f"paper_{paper_id}.docx",
-                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=f"paper_{paper_id}.docx",
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
 
 
 @main.route("/api/download/answer_key/<paper_id>", methods=["GET"])
