@@ -8,7 +8,11 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
+<<<<<<< HEAD
 set "VIRTUAL_ENV=C:\Users\abhis\Desktop\ai-question-paper-generator-main\venv"
+=======
+set "VIRTUAL_ENV=C:\Users\abhis\Desktop\ai-question-paper-generator\venv"
+>>>>>>> 48d25291ec6ce5143a5da61eefe84cd3b7c1546c
 
 if not defined PROMPT set PROMPT=$P$G
 
