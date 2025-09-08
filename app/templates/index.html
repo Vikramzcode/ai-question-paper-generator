@@ -87,16 +87,24 @@
     .preview-card { border-radius:12px; border:1px solid var(--border); background:var(--card); padding:16px; box-shadow:0 6px 16px -8px var(--shadow); margin-top:1rem; }
 
     /* Saved Templates button (moved to top-left) */
-    #openTemplatesBtn { position:fixed; top:20px; left:20px; z-index:1080; border-radius:8px; padding:.5rem .9rem; font-weight:700; }
-    #openPapersBtn{
-  position:fixed;
-  top:70px;          /* sits just below Saved Templates */
-  left:20px;
-  z-index:1080;
-  border-radius:8px;
-  padding:.5rem .9rem;
-  font-weight:700;
+   /* Toolbar container (fixed on top-left) */
+#toolbar {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 1000;   /* lower than Bootstrap offcanvas */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
+
+/* Buttons inside toolbar */
+#toolbar button {
+  border-radius: 8px;
+  padding: .5rem .9rem;
+  font-weight: 700;
+}
+
 
 
     /* Small summary styles */
@@ -296,14 +304,19 @@
   </div>
 
   <!-- Top-left Saved Templates button (replaces floating bottom-right) -->
-  <button id="openTemplatesBtn" class="btn btn-outline-primary" data-bs-toggle="offcanvas" data-bs-target="#templatesOffcanvas" aria-controls="templatesOffcanvas" title="Saved Templates">
+  <div id="toolbar">
+  <button id="openTemplatesBtn" class="btn btn-outline-primary"
+          data-bs-toggle="offcanvas" data-bs-target="#templatesOffcanvas"
+          aria-controls="templatesOffcanvas" title="Saved Templates">
     <i class="bi bi-collection me-1"></i> Saved Templates
   </button>
+
   <button id="openPapersBtn" class="btn btn-outline-success"
-        data-bs-toggle="offcanvas" data-bs-target="#papersOffcanvas"
-        aria-controls="papersOffcanvas" title="Generated Papers">
-  <i class="bi bi-journals me-1"></i> Generated Papers
-</button>
+          data-bs-toggle="offcanvas" data-bs-target="#papersOffcanvas"
+          aria-controls="papersOffcanvas" title="Generated Papers">
+    <i class="bi bi-journals me-1"></i> Generated Papers
+  </button>
+</div>
 
 
   <!-- Offcanvas Sidebar for Saved Templates (left) -->
