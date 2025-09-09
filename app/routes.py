@@ -11,6 +11,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph, Table
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 import google.generativeai as genai
 from .models import Question, Paper, PaperQuestion
 from . import db
@@ -51,65 +53,137 @@ def generate_paper():
         - marks (marks per question)
         - difficulty (Easy, Medium, Hard)
         - answer (correct answer or solution for the question; if MCQ, give the correct option letter like "A" or "B")
+        - explanation (a short explanation or solution for the answer; provide this ONLY for MCQ, Fill in the Blanks, or Matching questions)
+
+        Example of an MCQ:
+
+        {
+        "type": "MCQ",
+        "question": "Which planet is known as the Red Planet?",
+        "options": ["Earth", "Mars", "Jupiter", "Venus"],
+        "marks": 1,
+        "difficulty": "Easy",
+        "answer": "B",
+        "explanation": "Mars is called the Red Planet because of its reddish appearance."
+        }
         """
+
 
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
 
         try:
-            questions = json.loads(raw_text)
-        except json.JSONDecodeError:
-            json_match = re.search(r"```json\s*(.*?)```", raw_text, re.DOTALL)
-            if json_match:
-                raw_text = json_match.group(1)
                 questions = json.loads(raw_text)
-            else:
-                raise ValueError("AI returned invalid JSON.")
+        except json.JSONDecodeError:
+                json_match = re.search(r"```json\s*(.*?)```", raw_text, re.DOTALL)
+                if json_match:
+                    raw_text = json_match.group(1)
+                    questions = json.loads(raw_text)
+                else:
+                    raise ValueError("AI returned invalid JSON.")
 
+            
+               # --- Trim extras section-wise ---
+                balanced = []
+                for qtype, info in qdist.items():
+                    count_needed = int(info['count'])
+
+                    # Pick only questions of this type
+                    picked = [
+                        q for q in questions
+                        if (q.get("question_type") == qtype or q.get("type") == qtype)
+                    ]
+
+                    # Keep only up to the required number
+                    balanced.extend(picked[:count_needed])
+
+                questions = balanced
+
+                
+
+        # ✅ Ensure MCQs always have 4 options
         for q in questions:
-            q["question_text"] = q.get("question")
-            q["question_type"] = q.get("type")
-            new_q = Question(
-                school_name=school,
-                board=board,
-                class_=class_,
-                subject=subject,
-                question_type=q.get("type"),
-                difficulty=q.get("difficulty"),
-                question_text=q.get("question"),
-                marks=q.get("marks"),
-                answer=q.get("answer", "Not provided"),
-                source="AI"
-            )
-            db.session.add(new_q)
-            db.session.flush()
-            q['id'] = new_q.id
+                q_type = (q.get("type") or q.get("question_type") or "").strip()
+                q_text = q.get("question")
+
+                options = None
+                if q_type in ["MCQ", "Multiple Choice"]:
+                    opts = q.get("options", [])
+                    if not isinstance(opts, list):
+                        opts = []
+                    # Pad or trim to exactly 4
+                    while len(opts) < 4:
+                        opts.append(f"Option {len(opts)+1} (auto-filled)")
+                    options = opts[:4]
+
+                q["options"] = options  # only MCQs will have options
+
+                q["question_text"] = q_text
+                q["question_type"] = q_type
+
+                # ✅ Save into DB with options
+                new_q = Question(
+                    school_name=school,
+                    board=board,
+                    class_=class_,
+                    subject=subject,
+                    question_type=q_type,
+                    difficulty=q.get("difficulty"),
+                    question_text=q_text,
+                    marks=q.get("marks"),
+                    answer=q.get("answer", "Not provided"),
+                    source="AI",
+                    explanation=q.get("explanation", ""),
+                    options=json.dumps(options) if options else None  # NULL if not MCQ
+                )
+                db.session.add(new_q)
+                db.session.flush()
+
+                # ✅ Keep ID and options in memory for later JSON/PDF
+                q['id'] = new_q.id
+                q['options'] = q.get("options", [])
+
+
         db.session.commit()
 
     except Exception as e:
-        current_app.logger.error(f"AI generation failed: {e}. Falling back to DB.")
+        current_app.logger.error(f"AI generation failed: {e}. Falling back completely to DB.")
         db.session.rollback()
-        all_questions = []
+        questions = []
+
+    # --- Fallback: fill missing questions from DB if AI gave fewer than requested ---
+    total_needed = sum(int(info['count']) for info in qdist.values())
+    current_count = len(questions)
+    remaining_needed = total_needed - current_count
+
+    if remaining_needed > 0:
         for qtype, info in qdist.items():
-            # info is now a dict like {'count': 3, 'marks': 1}
-            num_to_fetch = int(info['count'])
+            count_needed = int(info['count'])
             marks = int(info['marks'])
-            if num_to_fetch > 0:
+
+            # already picked of this type
+            picked_count = sum(1 for q in questions if (q.get("question_type") == qtype or q.get("type") == qtype))
+            missing_for_type = max(0, count_needed - picked_count)
+
+            if missing_for_type > 0:
                 db_questions = (
                     Question.query
                     .filter_by(subject=subject, class_=class_, question_type=qtype, marks=marks)
                     .order_by(func.rand())
-                    .limit(num_to_fetch)
+                    .limit(missing_for_type)
                     .all()
                 )
-                all_questions.extend([q.as_dict() for q in db_questions])
-        questions = all_questions
+                for q in db_questions:
+                    q_dict = q.as_dict()
+                    q_dict['source'] = "Database"
+                    questions.append(q_dict)
+
 
     paper_id = str(uuid.uuid4())[:8]
     pdf_filename = f"paper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     word_filename = f"{paper_id}.docx"
-    answer_key_filename = f"answer_key_{paper_id}.txt"
+    answer_key_filename = f"answer_key_{paper_id}.pdf"
 
     paper_entry = Paper(
         paper_id=paper_id,
@@ -135,7 +209,7 @@ def generate_paper():
             type=q.get("question_type"),
             difficulty=q.get("difficulty"),
             marks=q.get("marks"),
-            options=q.get("options", []),
+            options=q.get("options") if q.get("options") else None,  # ✅ None if not MCQ
             answer=q.get("answer", "Not provided")
         )
         db.session.add(pq)
@@ -180,14 +254,21 @@ def generate_paper():
             "summary": summary
         }, f, indent=2, ensure_ascii=False)
 
+
+
+    # --- Register fonts for Hindi PDF ---
+        pdfmetrics.registerFont(TTFont("NotoSans", os.path.join(current_app.root_path, "fonts", "NotoSansDevanagari-Regular.ttf")))
+        pdfmetrics.registerFont(TTFont("NotoSans-Bold", os.path.join(current_app.root_path, "fonts", "NotoSansDevanagari-Bold.ttf")))
+
+
     # Generate PDF
     pdf_path = os.path.join(papers_dir, pdf_filename)
     c = canvas.Canvas(pdf_path, pagesize=A4)
     width, height = A4
 
-    c.setFont("Helvetica-Bold", 16)
+    c.setFont("NotoSans-Bold", 16)
     c.drawCentredString(width/2, height - 50, f"{school}")
-    c.setFont("Helvetica", 12)
+    c.setFont("NotoSans", 12)
 
     if exam_name:
         c.drawCentredString(width/2, height - 70, exam_name)
@@ -237,11 +318,12 @@ def generate_paper():
     qnum = 1
     styles = getSampleStyleSheet()
     styleN = styles["Normal"]
+    styleN.fontName = "NotoSans"
 
     for sec, qlist in sections.items():
         if not qlist:
             continue
-        c.setFont("Helvetica-Bold", 13)
+        c.setFont("NotoSans-Bold", 13)
         c.drawString(50, y, section_titles[sec])
         y -= 25
         for q in qlist:
@@ -253,20 +335,30 @@ def generate_paper():
                 y = height - 50
             p.drawOn(c, 70, y - h)
             y -= (h + 15)
+            # Render options for MCQ
             if sec == "Multiple Choice":
                 options = q.get("options", [])
-                for idx, opt in enumerate(options, start=1):
-                    opt_text = f"   ({chr(64+idx)}) {opt}"
-                    p_opt = Paragraph(opt_text, styleN)
-                    w, h = p_opt.wrap(width - 120, y)
-                    if y - h < 100:
-                        c.showPage()
-                        y = height - 50
-                    p_opt.drawOn(c, 90, y - h)
-                    y -= (h + 10)
+                # If options are stored as JSON string, parse them
+                if isinstance(options, str):
+                    try:
+                        options = json.loads(options)
+                    except Exception:
+                        options = []
+                if options and isinstance(options, list):
+                    for idx, opt in enumerate(options, start=1):
+                        opt_text = f"   ({chr(64+idx)}) {opt}"
+                        p_opt = Paragraph(opt_text, styleN)
+                        w, h = p_opt.wrap(width - 120, y)
+                        if y - h < 100:
+                            c.showPage()
+                            y = height - 50
+                            c.setFont("NotoSans", 12)
+                        p_opt.drawOn(c, 90, y - h)
+                        y -= (h + 10)
             qnum += 1
         y -= 15
     c.save()
+
 
     return jsonify({
         "questions": [{
@@ -317,15 +409,70 @@ def download_answer_key(paper_id):
     json_path = os.path.join(current_app.root_path, "static", "papers", f"{paper_id}.json")
     if not os.path.exists(json_path):
         return jsonify({"error": "Paper not found"}), 404
+
     with open(json_path, "r", encoding="utf-8") as f:
         paper = json.load(f)
-    answer_text = f"Answer Key for {paper.get('subject')} - Class {paper.get('class')}\n\n"
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+
+    # Styles
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    styles = getSampleStyleSheet()
+    styleN = styles["Normal"]
+
+    # Title
+    c.setFont("NotoSans-Bold", 16)
+    c.drawCentredString(width/2, height - 50, f"Answer Key - {paper.get('examName', 'Exam')}")
+    c.setFont("NotoSans", 12)
+    c.drawString(50, height - 80, f"School: {paper.get('schoolName', '')}")
+    c.drawString(50, height - 100, f"Class: {paper.get('class', '')} | Subject: {paper.get('subject', '')}")
+    c.line(50, height - 110, width - 50, height - 110)
+
+    y = height - 140
     for i, q in enumerate(paper.get("questions", []), 1):
-        answer_text += f"Answer {i}. {q.get('answer', 'Answer not available')}\n\n"
-    buf = io.BytesIO(answer_text.encode("utf-8"))
+        question_text = q.get("question_text", "")
+        answer_text = q.get("answer", "Answer not available")
+        explanation_text = q.get("explanation", "")
+
+        # Question
+        p_q = Paragraph(f"<b>Q{i}:</b> {question_text}", styleN)
+        w, h = p_q.wrap(width - 100, y)
+        if y - h < 50:
+            c.showPage()
+            y = height - 50
+        p_q.drawOn(c, 50, y - h)
+        y -= (h + 10)
+
+        # Answer
+        p_a = Paragraph(f"<b>Answer:</b> {answer_text}", styleN)
+        w, h = p_a.wrap(width - 100, y)
+        if y - h < 50:
+            c.showPage()
+            y = height - 50
+        p_a.drawOn(c, 70, y - h)
+        y -= (h + 10)
+
+        # Explanation for MCQ, Fill, Matching
+        if q.get("question_type") in ["MCQ", "Multiple Choice", "Fill in the Blanks", "Fill", "Matching", "Match"]:
+            p_exp = Paragraph(f"<b>Explanation:</b> {explanation_text}", styleN)
+            w, h = p_exp.wrap(width - 100, y)
+            if y - h < 50:
+                c.showPage()
+                y = height - 50
+            p_exp.drawOn(c, 70, y - h)
+            y -= (h + 20)
+        else:
+            y -= 10  # small spacing for other types
+
+    c.save()
+    buf.seek(0)
+
     return send_file(
         buf,
         as_attachment=True,
-        download_name=f"answer_key_{paper_id}.txt",
-        mimetype="text/plain"
+        download_name=f"answer_key_{paper_id}.pdf",
+        mimetype="application/pdf"
     )
