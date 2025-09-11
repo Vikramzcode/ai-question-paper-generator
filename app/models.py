@@ -63,15 +63,6 @@ class PaperQuestion(db.Model):
     difficulty = db.Column(db.String(20))
     marks = db.Column(db.Integer)
     options = db.Column(db.JSON, default=[])   # ✅ keep options JSON
-    options = db.Column(db.JSON)
     answer = db.Column(db.Text)
 
     paper = db.relationship("Paper", back_populates="questions")
-
-
-class AnswerKey(db.Model):
-    __tablename__ = "answer_keys"
-    id = db.Column(db.Integer, primary_key=True)
-    paper_id = db.Column(db.Integer)
-    question_id = db.Column(db.Integer)
-    answer = db.Column(db.Text)
