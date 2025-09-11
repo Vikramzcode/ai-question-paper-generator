@@ -64,5 +64,4 @@ class PaperQuestion(db.Model):
     marks = db.Column(db.Integer)
     options = db.Column(db.JSON, default=[])   # ✅ keep options JSON
     answer = db.Column(db.Text)
-
     paper = db.relationship("Paper", back_populates="questions")
