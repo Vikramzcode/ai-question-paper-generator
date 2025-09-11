@@ -1128,6 +1128,27 @@ generatePaperBtn.addEventListener('click', async () => {
     });
     if (!res.ok) throw new Error(`API error ${res.status}`);
     const data = await res.json();
+
+    saveGeneratedPaper({
+  examName: examNameEl.value.trim(),
+  schoolName: schoolNameEl.value.trim(),
+  schoolBoard: boardEl.value,
+  class: classEl.value,
+  subject: subjectEl.value,
+  chapters: Array.from(chaptersContainer.querySelectorAll('.chapter-checkbox:checked')).map(cb => cb.value),
+  questionTotals: {
+    totalQuestions: data.summary?.total_questions || 0,
+    totalMarks: data.summary?.total_marks || 0
+  },
+  questions: data.questions || [],
+  pdf_url: data.pdf_url,
+  word_url: data.word_url,
+  answer_key_url: data.answer_key_url
+});
+renderGeneratedPapers();
+
+
+
     // Defensive fallbacks if backend keys differ
     const questions = Array.isArray(data.questions) ? data.questions : [];
     const totalQ = data.summary?.total_questions ?? questions.length ?? 0;
@@ -1437,6 +1458,37 @@ function showGenerated(data) {
     </div>
   `;
 }
+
+
+/* ===================== Save & Render Generated Papers ===================== */
+function saveGeneratedPaper(paper) {
+  let papers = JSON.parse(localStorage.getItem('qp_papers') || '[]');
+  papers.push({
+    id: Date.now(),
+    ...paper
+  });
+  localStorage.setItem('qp_papers', JSON.stringify(papers));
+}
+
+function renderGeneratedPapers() {
+  const papers = JSON.parse(localStorage.getItem('qp_papers') || '[]');
+  generatedPapersGrid.innerHTML = papers.map(p => `
+    <div class="template-card">
+      <h6>${p.examName || 'Untitled Exam'}</h6>
+      <small>Class ${p.class || '-'} - ${p.subject || '-'}</small><br>
+      <small>Total Q: ${p.questionTotals?.totalQuestions || 0}, Marks: ${p.questionTotals?.totalMarks || 0}</small>
+    </div>
+  `).join('');
+}
+
+
+// Clear all saved papers
+clearAllPapersBtn?.addEventListener('click', () => {
+  if (!confirm('Clear all generated papers?')) return;
+  localStorage.removeItem('qp_papers');
+  renderGeneratedPapers();
+});
+
 
   
 
