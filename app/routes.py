@@ -23,6 +23,8 @@ main = Blueprint("main", __name__)
 def index():
     return render_template("index.html")
 
+# In routes.py, replace your entire generate_paper function with this one.
+
 @main.route("/api/generate", methods=["POST"])
 def generate_paper():
     data = request.get_json()
@@ -37,114 +39,146 @@ def generate_paper():
     exam_name = data.get("examName")
     questions = []
 
+    # --- HELPER FUNCTION TO NORMALIZE TYPES ---
+    # This helper will solve the mismatch problem
+    def _normalize_qtype(label):
+        label = (label or "").strip()
+        if label in ["MCQ", "Multiple Choice"]:
+            return "MCQ"
+        if label in ["Fill in the Blanks", "Fill"]:
+            return "Fill in the Blanks"
+        if label in ["Short Answer", "Short"]:
+            return "Short Answer"
+        if label in ["Long Answer", "Long"]:
+            return "Long Answer"
+        if label in ["Matching", "Match", "Match the Following"]:
+            return "Matching"
+        if label in ["Case Study", "Case"]:
+            return "Case Study"
+        return label
+
+    # Format the question distribution into a clear list for the AI
+    qdist_str_parts = []
+    for qtype, info in qdist.items():
+        count = info.get('count', 0)
+        if count > 0:
+            qdist_str_parts.append(f"- {count} {qtype} question(s)")
+    qdist_prompt_str = "\n".join(qdist_str_parts)
+
     try:
         prompt = f"""
         You are an experienced {board} school teacher. 
         Create a question paper for Class {class_}, Subject: {subject}.
         School: {school}
 
-        Question type distribution: {qdist}
-        Difficulty distribution: {ddist}
+        You MUST generate the question paper with the exact number of questions for each type as specified below:
+        {qdist_prompt_str}
 
-        Output only valid JSON array. Each item must have:
-        - type (MCQ, Fill in the Blanks, Short Answer, Long Answer, Case Study, etc.)
-        - question (text of the question)
-        - options (for MCQ only: provide exactly 4 options as a JSON list)
-        - marks (marks per question)
-        - difficulty (Easy, Medium, Hard)
-        - answer (correct answer or solution for the question; if MCQ, give the correct option letter like "A" or "B")
-        - explanation (a short explanation or solution for the answer; provide this ONLY for MCQ, Fill in the Blanks, or Matching questions)
+        You should also try to follow this difficulty distribution: {ddist}
 
-        Example of an MCQ:
+        Output only a valid JSON array of question objects. Do not include any other text or explanations. Each item in the array must have these exact keys:
+        - "type" (e.g., "MCQ", "Short Answer")
+        - "question" (the text of the question)
+        - "options" (for "MCQ" type only: provide exactly 4 options as a JSON list of strings)
+        - "marks" (integer value of the marks for the question)
+        - "difficulty" ("Easy", "Medium", or "Hard")
+        - "answer" (the correct answer. If the type is "MCQ", provide the correct option letter like "A" or "B")
+        - "explanation" (a brief explanation for the answer, especially for "MCQ" and "Fill in the Blanks" types)
 
-        {
-        "type": "MCQ",
-        "question": "Which planet is known as the Red Planet?",
-        "options": ["Earth", "Mars", "Jupiter", "Venus"],
-        "marks": 1,
-        "difficulty": "Easy",
-        "answer": "B",
-        "explanation": "Mars is called the Red Planet because of its reddish appearance."
-        }
+        Here is an example of a single MCQ object in the array:
+        {{
+            "type": "MCQ",
+            "question": "Which planet is known as the Red Planet?",
+            "options": ["Earth", "Mars", "Jupiter", "Venus"],
+            "marks": 1,
+            "difficulty": "Easy",
+            "answer": "B",
+            "explanation": "Mars is called the Red Planet because of its reddish appearance."
+        }}
+        
+        Here is an example of a Matching question object:
+        {{
+            "type": "Matching",
+            "question": "Match the items in Column A with their correct description in Column B.\\n\\nColumn A\\n1. Mitochondria\\n2. Ribosome\\n3. Nucleus\\n\\nColumn B\\nA. Control center of the cell\\nB. Powerhouse of the cell\\nC. Protein synthesis",
+            "options": null,
+            "marks": 3,
+            "difficulty": "Medium",
+            "answer": "1-B, 2-C, 3-A",
+            "explanation": "Mitochondria produce energy, ribosomes synthesize proteins, and the nucleus contains the cell's genetic material."
+        }}
+
         """
-
-
         model = genai.GenerativeModel("gemini-1.5-flash")
         response = model.generate_content(prompt)
         raw_text = response.text.strip()
 
         try:
-                questions = json.loads(raw_text)
+            questions = json.loads(raw_text)
         except json.JSONDecodeError:
-                json_match = re.search(r"```json\s*(.*?)```", raw_text, re.DOTALL)
-                if json_match:
-                    raw_text = json_match.group(1)
-                    questions = json.loads(raw_text)
-                else:
-                    raise ValueError("AI returned invalid JSON.")
+            json_match = re.search(r"```json\s*(.*?)```", raw_text, re.DOTALL)
+            if json_match:
+                raw_text = json_match.group(1)
+                questions = json.loads(raw_text)
+            else:
+                raise ValueError("AI returned invalid JSON.")
 
-            
-               # --- Trim extras section-wise ---
-                balanced = []
-                for qtype, info in qdist.items():
-                    count_needed = int(info['count'])
-
-                    # Pick only questions of this type
-                    picked = [
-                        q for q in questions
-                        if (q.get("question_type") == qtype or q.get("type") == qtype)
-                    ]
-
-                    # Keep only up to the required number
-                    balanced.extend(picked[:count_needed])
-
-                questions = balanced
-
-                
-
-        # ✅ Ensure MCQs always have 4 options
+        # --- FIX #1: NORMALIZE AI-GENERATED TYPES BEFORE FILTERING ---
         for q in questions:
-                q_type = (q.get("type") or q.get("question_type") or "").strip()
-                q_text = q.get("question")
+            q["question_type"] = _normalize_qtype(q.get("type"))
+        
+        # --- FIX #2: USE NORMALIZED TYPES FOR BALANCING ---
+        balanced_questions = []
+        for qtype_frontend, info in qdist.items():
+            count_needed = int(info['count'])
+            normalized_type = _normalize_qtype(qtype_frontend) # Use the helper
+            
+            # Pick questions that match the normalized type
+            picked = [q for q in questions if q.get("question_type") == normalized_type]
+            
+            balanced_questions.extend(picked[:count_needed])
 
-                options = None
-                if q_type in ["MCQ", "Multiple Choice"]:
-                    opts = q.get("options", [])
-                    if not isinstance(opts, list):
-                        opts = []
-                    # Pad or trim to exactly 4
-                    while len(opts) < 4:
-                        opts.append(f"Option {len(opts)+1} (auto-filled)")
-                    options = opts[:4]
+        questions = balanced_questions
+        
+        # Process and save the valid questions from AI
+        processed_questions = []
+        for q in questions:
+            q_type = q.get("question_type")
+            q_text = q.get("question", "")
+            options = q.get("options", [])
+            
+            if q_type == "MCQ":
+                if not isinstance(options, list):
+                    options = []
+                while len(options) < 4:
+                    options.append(f"Option {len(options)+1} (auto-filled)")
+                options = options[:4]
+            
+            new_q = Question(
+                school_name=school,
+                board=board,
+                class_=class_,
+                subject=subject,
+                question_type=q_type,
+                difficulty=q.get("difficulty"),
+                question_text=q_text,
+                marks=q.get("marks"),
+                answer=q.get("answer", "Not provided"),
+                source="AI",
+                explanation=q.get("explanation", ""),
+                # --- FIX #3: SAVE OPTIONS DIRECTLY, NOT AS A JSON STRING ---
+                options=options if q_type == "MCQ" else None
+            )
+            db.session.add(new_q)
+            db.session.flush()
 
-                q["options"] = options  # only MCQs will have options
+            # Keep track of the question for the response
+            q['id'] = new_q.id
+            q['source'] = "AI"
+            q['options'] = options if q_type == "MCQ" else None
+            q['question_text'] = q_text
+            processed_questions.append(q)
 
-                q["question_text"] = q_text
-                q["question_type"] = q_type
-
-                # ✅ Save into DB with options
-                new_q = Question(
-                    school_name=school,
-                    board=board,
-                    class_=class_,
-                    subject=subject,
-                    question_type=q_type,
-                    difficulty=q.get("difficulty"),
-                    question_text=q_text,
-                    marks=q.get("marks"),
-                    answer=q.get("answer", "Not provided"),
-                    source="AI",
-                    explanation=q.get("explanation", ""),
-                    options=json.dumps(options) if options else None  # NULL if not MCQ
-                )
-                db.session.add(new_q)
-                db.session.flush()
-
-                # ✅ Keep ID and options in memory for later JSON/PDF
-                q['id'] = new_q.id
-                q['options'] = q.get("options", [])
-
-
+        questions = processed_questions
         db.session.commit()
 
     except Exception as e:
@@ -152,24 +186,23 @@ def generate_paper():
         db.session.rollback()
         questions = []
 
-    # --- Fallback: fill missing questions from DB if AI gave fewer than requested ---
+    # --- Fallback: fill missing questions from DB ---
     total_needed = sum(int(info['count']) for info in qdist.values())
-    current_count = len(questions)
-    remaining_needed = total_needed - current_count
-
-    if remaining_needed > 0:
-        for qtype, info in qdist.items():
+    if len(questions) < total_needed:
+        for qtype_frontend, info in qdist.items():
             count_needed = int(info['count'])
             marks = int(info['marks'])
-
-            # already picked of this type
-            picked_count = sum(1 for q in questions if (q.get("question_type") == qtype or q.get("type") == qtype))
+            
+            # --- FIX #4: USE NORMALIZED TYPE FOR COUNTING AND QUERYING ---
+            normalized_type = _normalize_qtype(qtype_frontend)
+            
+            picked_count = sum(1 for q in questions if q.get("question_type") == normalized_type)
             missing_for_type = max(0, count_needed - picked_count)
 
             if missing_for_type > 0:
                 db_questions = (
                     Question.query
-                    .filter_by(subject=subject, class_=class_, question_type=qtype, marks=marks)
+                    .filter_by(subject=subject, class_=class_, question_type=normalized_type, marks=marks)
                     .order_by(func.rand())
                     .limit(missing_for_type)
                     .all()
@@ -179,8 +212,8 @@ def generate_paper():
                     q_dict['source'] = "Database"
                     questions.append(q_dict)
 
-
     paper_id = str(uuid.uuid4())[:8]
+    # ... (rest of your function from paper_id onwards remains the same)
     pdf_filename = f"paper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     word_filename = f"{paper_id}.docx"
     answer_key_filename = f"answer_key_{paper_id}.pdf"
