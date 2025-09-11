@@ -985,9 +985,9 @@ chaptersData["State Board"] = JSON.parse(JSON.stringify(chaptersData["CBSE"]));
   const saveQuickBtn = document.getElementById('saveQuickBtn');
   const savedTemplatesGrid = document.getElementById('savedTemplatesGrid');
   const openPapersBtn = document.getElementById('openPapersBtn');
-const clearAllPapersBtn = document.getElementById('clearAllPapers');
-const generatedPapersGrid = document.getElementById('generatedPapersGrid');
-
+  const clearAllPapersBtn = document.getElementById('clearAllPapers');
+  const generatedPapersGrid = document.getElementById('generatedPapersGrid');
+  const generatedPaperPreview = document.getElementById('generatedPaperContainer');
 
   const themeToggle = document.getElementById('themeToggle');
   const generatePaperBtn = document.getElementById('generatePaperBtn');
@@ -1129,7 +1129,7 @@ generatePaperBtn.addEventListener('click', async () => {
     if (!res.ok) throw new Error(`API error ${res.status}`);
     const data = await res.json();
 
-    saveGeneratedPaper({
+saveGeneratedPaper({
   examName: examNameEl.value.trim(),
   schoolName: schoolNameEl.value.trim(),
   schoolBoard: boardEl.value,
@@ -1145,6 +1145,7 @@ generatePaperBtn.addEventListener('click', async () => {
   word_url: data.word_url,
   answer_key_url: data.answer_key_url
 });
+
 renderGeneratedPapers();
 
 
@@ -1472,14 +1473,67 @@ function saveGeneratedPaper(paper) {
 
 function renderGeneratedPapers() {
   const papers = JSON.parse(localStorage.getItem('qp_papers') || '[]');
-  generatedPapersGrid.innerHTML = papers.map(p => `
-    <div class="template-card">
+  generatedPapersGrid.innerHTML = papers.map((p, idx) => `
+    <div class="template-card cursor-pointer" data-paper-index="${idx}">
       <h6>${p.examName || 'Untitled Exam'}</h6>
       <small>Class ${p.class || '-'} - ${p.subject || '-'}</small><br>
       <small>Total Q: ${p.questionTotals?.totalQuestions || 0}, Marks: ${p.questionTotals?.totalMarks || 0}</small>
     </div>
   `).join('');
+
+  // 🔑 Attach event listener AFTER inserting HTML
+  const cards = document.querySelectorAll('.template-card');
+  cards.forEach(card => {
+    card.addEventListener('click', () => {
+      const index = card.dataset.paperIndex;
+      console.log("Opening saved paper:", index); // Debug log
+      openSavedPaper(index);
+    });
+  });
 }
+
+
+
+function openSavedPaper(index) {
+  const papers = JSON.parse(localStorage.getItem('qp_papers') || '[]');
+  const p = papers[index];
+  if (!p) {
+    console.error("No paper found at index", index);
+    return;
+  }
+
+  generatedPaperPreview.innerHTML = `
+    <div class="card shadow-sm p-3">
+      <h4 class="mb-2">${p.examName || 'Untitled Exam'}</h4>
+      <p><b>School:</b> ${p.schoolName || '-'} | <b>Board:</b> ${p.schoolBoard || '-'}</p>
+      <p><b>Class:</b> ${p.class || '-'} | <b>Subject:</b> ${p.subject || '-'}</p>
+      <p><b>Total Questions:</b> ${p.questionTotals?.totalQuestions || 0},
+         <b>Total Marks:</b> ${p.questionTotals?.totalMarks || 0}</p>
+      <hr>
+      <div class="questions-list">
+        ${p.questions.map((q, i) => `
+          <div class="mb-3">
+            <b>Q${i+1}.</b> ${q.question_text || q.question}
+            <span class="badge bg-secondary ms-2">${q.marks || 0} marks</span>
+            ${q.type ? `<span class="badge bg-info ms-1">${q.type}</span>` : ""}
+            ${q.difficulty ? `<span class="badge bg-warning text-dark ms-1">${q.difficulty}</span>` : ""}
+          </div>
+        `).join('')}
+      </div>
+      <hr>
+      <div class="d-flex gap-2">
+        ${p.pdf_url ? `<a href="${p.pdf_url}" class="btn btn-sm btn-primary" target="_blank">📄 Download PDF</a>` : ""}
+        ${p.word_url ? `<a href="${p.word_url}" class="btn btn-sm btn-success" target="_blank">📝 Download Word</a>` : ""}
+        ${p.answer_key_url ? `<a href="${p.answer_key_url}" class="btn btn-sm btn-warning" target="_blank">🔑 Download Answer Key</a>` : ""}
+      </div>
+    </div>
+  `;
+
+  // Scroll into view when preview is loaded
+  document.getElementById('generatedPaperSection')?.scrollIntoView({ behavior: 'smooth' });
+}
+
+
 
 
 // Clear all saved papers
