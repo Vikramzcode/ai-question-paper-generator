@@ -124,7 +124,7 @@ ai-question-paper-generator/
 1. **Clone repo**
 
    ```bash
-   git clone https://github.com/Anshuu2004/ai-question-paper-generator.git
+   git clone https://github.com/Vikramzcode/ai-question-paper-generator.git
    cd ai-question-paper-generator
    ```
 
