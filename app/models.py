@@ -11,8 +11,10 @@ class Question(db.Model):
     difficulty = db.Column(db.String(20))
     marks = db.Column(db.Integer)
     question_text = db.Column(db.Text)
+    options = db.Column(db.JSON, default=[])   # ✅ Added this
     answer = db.Column(db.Text)
     source = db.Column(db.String(50))
+    explanation = db.Column(db.Text)
 
     def as_dict(self):
         return {
@@ -25,8 +27,10 @@ class Question(db.Model):
             "difficulty": self.difficulty,
             "marks": self.marks,
             "question_text": self.question_text,
+            "options": self.options or [],   # ✅ return options
             "answer": self.answer,
-            "source": self.source
+            "source": self.source,
+            "explanation": self.explanation
         }
 
 
@@ -58,15 +62,6 @@ class PaperQuestion(db.Model):
     type = db.Column(db.String(50))
     difficulty = db.Column(db.String(20))
     marks = db.Column(db.Integer)
-    options = db.Column(db.JSON)
+    options = db.Column(db.JSON, default=[])   # ✅ keep options JSON
     answer = db.Column(db.Text)
-
     paper = db.relationship("Paper", back_populates="questions")
-
-
-class AnswerKey(db.Model):
-    __tablename__ = "answer_keys"
-    id = db.Column(db.Integer, primary_key=True)
-    paper_id = db.Column(db.Integer)
-    question_id = db.Column(db.Integer)
-    answer = db.Column(db.Text)
