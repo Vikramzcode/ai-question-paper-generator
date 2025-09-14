@@ -195,7 +195,3 @@ ai-question-paper-generator/
 * **Vikram Sen**
 * **Abhishek**
 * **Chanchal**
-
----
-
-Would you like me to also **add screenshots and usage examples** (Live Preview screenshots from your UI) inside this README so it looks attractive for GitHub?
